@@ -1,0 +1,38 @@
+--- a/c/include/proton/proactor.h
++++ b/c/include/proton/proactor.h
+@@ -91,6 +91,19 @@
+ PNP_EXTERN pn_proactor_t *pn_proactor(void);
+ 
+ /**
++ * LOCAL PATCH (libusurl): return the proactor internal libuv loop.
++ *
++ * Only available when built with PROACTOR=libuv. The returned pointer
++ * is a `uv_loop_t *` that may be shared with other libuv based
++ * components (e.g. uSockets built with LIBUS_USE_LIBUV, via
++ * `us_create_loop(hint)`).
++ *
++ * @note the pointer is valid only while the proactor is alive.
++ * The proactor owns the loop; do not delete it.
++ */
++PNP_EXTERN void *pn_proactor_loop(pn_proactor_t *proactor);
++
++/**
+  * Free the proactor. Abort open connections/listeners, clean up all resources.
+  */
+ PNP_EXTERN void pn_proactor_free(pn_proactor_t *proactor);
+--- a/c/src/proactor/libuv.c
++++ b/c/src/proactor/libuv.c
+@@ -1249,6 +1249,13 @@
+   return p;
+ }
+ 
++/* LOCAL PATCH (libusurl): expose the internal uv_loop so external
++   libuv-based eventing (e.g. uSockets built with LIBUS_USE_LIBUV)
++   can share the proactor loop via us_create_loop(hint). */
++void *pn_proactor_loop(pn_proactor_t *p) {
++  return &p->loop;
++}
++
+ void pn_proactor_free(pn_proactor_t *p) {
+   /* Close all open handles */
+   uv_walk(&p->loop, on_proactor_free, NULL);
