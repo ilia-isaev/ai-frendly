@@ -20,9 +20,9 @@ Componentes: module `usurl` (`src/usurl.cxx`) + uSockets 0.8.8
 - O prepare/check handle é `uv_unref`'d (`src/eventing/libuv.c:143,148`) — não mantém o
   loop vivo — MAS continua disparando a cada iteração.
 - Correção: passar stubs no-op para os três slots.
-  - `static void usurl_noop_cb(struct us_loop_t*) {}` — `src/usurl.cxx:688`.
-  - `us_create_loop(loop, usurl_noop_cb, usurl_noop_cb, usurl_noop_cb, 0)`
-    — `src/usurl.cxx:695`.
+   - `static void usurl_noop_cb(struct us_loop_t*) {}` — `src/usurl.cxx:694`.
+   - `us_create_loop(loop, usurl_noop_cb, usurl_noop_cb, usurl_noop_cb, 0)`
+     — `src/usurl.cxx:701`.
 
 ## GOTCHA 2 — `us_loop_free` em loop adotado NÃO deleta nem roda o `uv_loop_t`
 - `us_loop_free` só faz `uv_run`/`uv_loop_delete` quando `!is_default`:
@@ -32,12 +32,37 @@ Componentes: module `usurl` (`src/usurl.cxx`) + uSockets 0.8.8
   close-callbacks pendentes (uv_close é assíncrono) e **não** deleta o loop.
 - Correção no `~Client` (ordem):
   1. fechar contextos + destruir records (`us_socket_context_close` / `us_socket_close`);
-  2. `us_loop_free(usloop)` — `src/usurl.cxx:723` (só libera estado interno);
+   2. `us_loop_free(usloop)` — `src/usurl.cxx:729` (só libera estado interno);
   3. o CONSUMIDOR deve rodar o loop mais uma vez (`uv_run(loop, UV_RUN_DEFAULT)`) para
      disparar as close-callbacks pendentes;
   4. depois `uv_loop_delete(loop)`.
-- No teste: `uv_run(loop, UV_RUN_DEFAULT)` antes de `server.shutdown_server()` e
-  `uv_loop_delete(loop)` — `tests/test_main.cpp:207-209`.
+- No teste: `uv_run(loop, UV_RUN_DEFAULT)` logo antes de `uv_loop_delete(loop)` —
+  `tests/test_main.cpp:410`.
+
+## GOTCHA 3 — destruir record com o socket AINDA ABERTO → UAF (callback tardio)
+- Sintoma: crash INTERMITENTE no `ctest` (`std::out_of_range` em
+  `std::string::substr: __pos (which is 18446744073709551615) > this->size()
+  (which is 0)` → SIGABRT), enquanto `./build/usurl_tests` direto passava.
+  Taxa baixa (~1-10%); gdb em loop mascara o race (40/40 pass), e `core_pattern`
+  era pipe (sem core dump) → difícil de capturar.
+- Causa: `on_timeout` (`src/usurl.cxx:592`) finaliza o record (`finish()`) **sem
+  fechar o socket**. Depois `~Client`/`remove_finished` → `destroy_record`
+  (`src/usurl.cxx:778`) fazia `delete rec` + `delete st` com o socket AINDA ABERTO.
+  O ext-slot (`us_socket_ext`) ainda apontava para o `SocketState*`/`Record`
+  deletados; um callback tardio (`on_close`/`on_end`/`on_data`) num `uv_run`
+  posterior via `state_of(ssl, s)` → `*ext` → UAF sobre o `buf` (std::string)
+  corrompido → `substr(npos)` → abort.
+- Por que só às vezes: no sucesso e no close-delimited o servidor fecha a conexão
+  (FIN) → `on_close` roda ANTES do `~Client` → socket já encerrado → sem UAF.
+  Só o TIMEOUT (e qualquer fim que deixe o socket aberto) expõe a janela.
+- Correção (`destroy_record`, `src/usurl.cxx:778`): antes de deletar, se
+  `rec->socket && !rec->socket_gone` → limpar o ext-slot para `nullptr`
+  (`*static_cast<SocketState**>(us_socket_ext(rec->ssl, rec->socket)) = nullptr`)
+  E `us_socket_close(rec->ssl, rec->socket, 0, nullptr)`. Callbacks tardios veem
+  slot nulo → `state_of` devolve `nullptr` → no-op (não toca memória liberada).
+- `bool socket_gone` (`src/usurl.cxx:93`) é setado em `on_close`/`on_connect_error`
+  (`:584`,`:602`) para NÃO chamar `us_socket_close`/`us_socket_ext` num socket já
+  encerrado (evita double-close / acesso a socket liberado).
 
 ## Regra de posse do loop (contrato com qpid-proton)
 - O `uv_loop_t` pertence ao proactor do proton (donor). uSockets só ADOTA via `hint`.

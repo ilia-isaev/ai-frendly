@@ -42,6 +42,8 @@ Após `import usurl;`, os tipos são globais (`Client`, `Finished<T>`).
 - 14 callbacks (7 eventos × 2 contextos): `on_open`, `on_data`, `on_end`, `on_writable`, `on_timeout`, `on_close`, `on_connect_error`.
 - Parser HTTP inline: request line `GET <path> HTTP/1.1` + `Host`; framing `content-length` / `chunked` / `close`-delimited.
 - Estados de request: `kIdle → kConnecting → kWriting → kReading → kDone`.
+- Timeout de leitura: `us_socket_timeout(ssl, s, kTimeoutSec)` (4 s), armada em `on_open`
+  e no `connect_record`; `on_timeout` finaliza com `error="timeout"`, `status=0`.
 
 ```
 Aplicação (qpid-proton)
@@ -57,7 +59,7 @@ uSockets 0.8.8 ── libuv 1.52.0 (event loop externa, dirigida pela aplicaçã
 
 ## Status do plano (8 passos)
 Todos os 8 passos do `PROJECT_PROMT.md` estão **concluídos**. Build verde; o
-executável `usurl_tests` compila; os **8 checks** passam; exit 0.
+executável `usurl_tests` compila; os **20 checks** passam; exit 0.
 
 | Passo | Conteúdo | Onde está registrado | Status |
 |---|---|---|---|
@@ -68,7 +70,7 @@ executável `usurl_tests` compila; os **8 checks** passam; exit 0.
 | 5 | Testes | `docs/etapa4-implementacao-teste.md` | concluída |
 | 6 | Documentação | este `overview.md` + `docs/` | concluída |
 | 7 | Revisão | `docs/etapa4-implementacao-teste.md` ("Divergências corrigidas") | concluída |
-| 8 | Teste final | `docs/etapa4-implementacao-teste.md` (8/8 PASS, verde) | concluída |
+| 8 | Teste final | `docs/etapa4-implementacao-teste.md` (20/20 PASS, verde) | concluída |
 
 O mapeamento reflete onde cada conteúdo está registrado: passos 2-3 compartilham
 um documento (arquitetura + plano), e 4-5-8 compartilham a etapa 4 (a revisão do
@@ -84,4 +86,5 @@ passo 7 é a seção "Divergências corrigidas vs. o plano").
 ## Build e teste
 - Compilar: `ninja -C build` (target da lib = `usurl`; de teste = `usurl_tests`).
 - Rodar: `./build/usurl_tests` → saída `ALL TESTS PASSED (0 failure(s))`, exit 0.
-- O teste ainda não está ligado ao CTest (é um executável simples).
+- Ligado ao CTest: `add_test(NAME usurl_tests COMMAND usurl_tests)` — `ctest --test-dir build`
+  roda o executável (1 teste). Também roda direto: `./build/usurl_tests`.

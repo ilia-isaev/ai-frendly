@@ -13,6 +13,7 @@ Este projeto foi criado com auxílio do modelo de IA **Qwen3.8 27B**.
 - `get` retorna imediatamente (não bloqueia); o resultado aparece depois, via `finished<T>()`.
 - Type-erasure: um único `Client` serve payloads de qualquer tipo `T` (identificados por `type_tag<T>`).
 - Framing do corpo da resposta: `content-length`, `chunked` e `close`-delimited.
+- Timeout de leitura (4 s): conexão que fica silenciosa termina com `error="timeout"` (`status=0`).
 - Loop compartilhado: a lib **não** chama `uv_run`/`us_loop_run`; quem dirige o loop é o consumidor (ex.: `pn_proactor_wait` do qpid-proton).
 
 ## API pública
@@ -68,10 +69,11 @@ ninja -v -C build/ install
 ```
 
 ## Testar
-O teste é um executável (`build/usurl_tests`); ainda não está ligado ao CTest.
+O teste é um executável (`build/usurl_tests`), registrado no CTest (`add_test`).
 ```
-ninja -v -C build usurl_tests   # compila o executável de teste
-./build/usurl_tests             # roda: imprime [PASS]/[FAIL] por check
+   ninja -v -C build usurl_tests   # compila o executável de teste
+   ./build/usurl_tests             # roda: imprime [PASS]/[FAIL] por check
+   ctest --test-dir build          # ou via CTest (1 teste: usurl_tests)
 ```
 Saída esperada: `ALL TESTS PASSED (0 failure(s))` e exit code 0.
 

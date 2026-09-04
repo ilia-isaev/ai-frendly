@@ -90,6 +90,7 @@ public:
     struct us_socket_t* socket = nullptr;
     SocketState* state = nullptr;
     bool finished = false;
+    bool socket_gone = false;
     std::string buf;
     std::string body;
     int status = 0;
@@ -285,9 +286,9 @@ std::size_t chunk_size_at(const std::string& buf, std::size_t pos, bool& ok)
     return size;
 }
 
-bool chunked_complete(const std::string& buf)
+bool chunked_complete(const std::string& buf, std::size_t start)
 {
-    std::size_t pos = 0;
+    std::size_t pos = start;
     while (pos < buf.size()) {
         bool ok = false;
         const std::size_t size = chunk_size_at(buf, pos, ok);
@@ -303,10 +304,10 @@ bool chunked_complete(const std::string& buf)
     return false;
 }
 
-std::string decode_chunked(const std::string& buf)
+std::string decode_chunked(const std::string& buf, std::size_t start)
 {
     std::string out;
-    std::size_t pos = 0;
+    std::size_t pos = start;
     while (pos < buf.size()) {
         bool ok = false;
         const std::size_t size = chunk_size_at(buf, pos, ok);
@@ -580,6 +581,7 @@ void RecordBase::on_writable(struct us_socket_t* s)
 
 void RecordBase::on_close(struct us_socket_t*)
 {
+    socket_gone = true;
     if (!finished) {
         if (error.empty())
             error = "connection closed";
@@ -597,6 +599,7 @@ void RecordBase::on_timeout()
 
 void RecordBase::on_connect_error(struct us_socket_t*, int)
 {
+    socket_gone = true;
     if (!finished) {
         error = "connect error";
         finish();
@@ -655,7 +658,7 @@ void RecordBase::check_complete()
             + static_cast<std::size_t>(content_length))
             finalize();
     } else if (framing == Framing::chunked) {
-        if (chunked_complete(buf))
+        if (chunked_complete(buf, static_cast<std::size_t>(body_start)))
             finalize();
     }
 }
@@ -669,7 +672,7 @@ void RecordBase::finalize()
             static_cast<std::size_t>(body_start),
             static_cast<std::size_t>(content_length));
     else if (framing == Framing::chunked)
-        body = decode_chunked(buf);
+        body = decode_chunked(buf, static_cast<std::size_t>(body_start));
     else
         body = buf.substr(static_cast<std::size_t>(body_start));
     finish();
@@ -774,6 +777,12 @@ void Client::connect_record(RecordBase* rec)
 
 void Client::destroy_record(RecordBase* rec)
 {
+    if (rec->socket && !rec->socket_gone) {
+        void* ext = us_socket_ext(rec->ssl, rec->socket);
+        if (ext)
+            *static_cast<SocketState**>(ext) = nullptr;
+        us_socket_close(rec->ssl, rec->socket, 0, nullptr);
+    }
     SocketState* st = rec->state;
     if (rec->destroy)
         rec->destroy(rec);

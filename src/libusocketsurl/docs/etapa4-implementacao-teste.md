@@ -1,12 +1,13 @@
 # Etapa 4 — Implementação e Teste (concluída)
 
-Status: concluída — build verde, executável `usurl_tests` compila, todos os 8 checks PASS, exit 0.
+Status: concluída — build verde, executável `usurl_tests` compila, todos os 20 checks PASS, exit 0.
 
 ## O que foi entregue
 - Module `usurl` (`src/usurl.cxx`) — C++23 module (`.cxx`), target estático `usurl`.
-- Teste (`tests/test_main.cpp`) — importador do module; servidor HTTP local em thread;
-  8 checks cobrindo: GET 200 (status/body/payload), `remove_finished`, URL inválida,
-  connection refused, e múltiplos records.
+- Teste (`tests/test_main.cpp`) — importador do module; `TcpServer` (HTTP local em
+  thread) + `StallServer` (para timeout); **20 checks** cobrindo: content-length
+  (sucesso / `remove_finished` / URL inválida / refused / múltiplos), chunked,
+  close-delimited, multi-type (type-erasure) e timeout.
 - `CMakeLists.txt` — Ninja + `FILE_SET CXX_MODULES`; `find_library` para `uSockets`,
   `uv`, `ssl`, `crypto`.
 - Build: `cmake -B build -G Ninja` → `cmake --build build` → `./build/usurl_tests`.
@@ -58,8 +59,8 @@ export class Client {
 ## Gotcha do harness de teste (join)
 - Thread de servidor bloqueada em `accept()` NÃO é acordada por `close(listen_fd)` →
   `std::thread::join()` trava para sempre.
-- Correção: `SO_RCVTIMEO` (100 ms) no socket de listen (`tests/test_main.cpp:60-61`);
-  no loop `run()`, `accept < 0` com `!stop` → `continue` (`:77`). Assim o worker
+- Correção: `SO_RCVTIMEO` (100 ms) no socket de listen (`tests/test_main.cpp:124-126`);
+   no loop `run()`, `accept < 0` com `!stop` → `continue` (`:141`). Assim o worker
   observa o `stop` e sai; `join()` completa.
 
 ## Restrição de stdout buffered (diagnóstico)
@@ -67,3 +68,26 @@ export class Client {
 - Causa: `check()` usava `std::cout` (bufferizado); ao travar em `join()` e ser morto
   pelo `timeout`, o buffer nunca era flushado → linhas PASS perdidas.
 - Diagnóstico feito com marcadores em `stderr` (unbuffered). Marcadores removidos depois.
+
+## Timeout (S1 + T5)
+- `constexpr int kTimeoutSec = 4;` (`src/usurl.cxx:537`).
+- Armada em `on_open` (`src/usurl.cxx:551`) e re-armada no `connect_record`
+  (`src/usurl.cxx:775`), via `us_socket_timeout(ssl, s, kTimeoutSec)`.
+- `on_timeout` (`src/usurl.cxx:592`) só age se `!finished`; finaliza com
+  `error="timeout"`, `status=0`.
+- T5: `StallServer` aceita a conexão e fica 8000 ms em silêncio → timeout em ~4 s.
+
+## UAF — record destruído com o socket aberto (crash flaky no ctest)
+- Sintoma: `std::out_of_range` em `std::string::substr` (`__pos = npos` sobre string
+  vazia) → SIGABRT, INTERMITENTE no `ctest`, ausente no run direto.
+- Causa: `on_timeout` finaliza sem fechar o socket; `destroy_record` deletava
+  `rec`/`st` com o socket aberto → callback tardio via `state_of` fazia UAF.
+- Correção: `destroy_record` (`src/usurl.cxx:778`) desanexa o ext-slot (p/ `nullptr`)
+  e chama `us_socket_close` antes de deletar, guardado por `socket_gone`
+  (`src/usurl.cxx:93`). Detalhes em `design_notes/usockets-shared-loop.md` (GOTCHA 3).
+
+## Decoder chunked — operar sobre o body, não sobre o buffer inteiro
+- `chunked_complete(buf, start)` (`src/usurl.cxx:289`) e `decode_chunked(buf, start)`
+  (`src/usurl.cxx:307`) tomam `start = body_start`. Antes, começavam em `pos=0` e a
+  status-line `HTTP/1.1 200 OK` era lida como "chunk size" → `ok=false` para sempre
+  → o record do chunked nunca finalizava (T2 travava).
