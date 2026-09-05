@@ -2,20 +2,16 @@
 Não instale nada e use só as ferramentas já instaladas.
 Use CMake com Ninja para compilar o projeto.
 Use `find_library` no CMakeLists.txt, exemplo: `find_library(LIB_UV NAMES uv HINTS ../../lib REQUIRED)`.
-Use C++23 modules.
-Use a extensão `.cxx` para arquivos com código-fonte.
+Use C++23 com cabelçalhos convencionais.
 Crie, se não existirem, os diretórios `./tests` e `./scratch`.
 Ponha o código-fonte no diretório `./src`.
 Ponha a documentação no diretório `./docs`.
 Ponha informações sobre o desenho no diretório `./design_notes`.
 Pode ver os diretórios `./`, `../../include`, `../../lib` e `../../third_party`.
 Veja como foram compiladas as dependências em `../../third_party/TIPS`.
-Veja um exemplo de projeto em `../cxx_project_example`; use como template para criar o `CMakeLists.txt`, o uso do Ninja e a criação/uso de modules.
 
-## Gotchas de build (C++23 modules + uSockets)
+## Gotchas de build (C++23 + uSockets)
 Erros que custam tempo real de debugging. O "porquê" e o detalhe completo estão em `design_notes/`.
-- Iterator nomeado não funciona sobre container de tipo-module (ex.: `std::vector<Finished<T>>` definido no module) → use loop por índice.
-- O TU importador deve `#include` os std-headers necessários no **global fragment** ANTES do `import` (ex.: `#include <vector>` no `module;` global fragment).
 - Forward-decl de tipo exportado: declare `export` no site de definição e redeclare **não-export** no importador (consistência), senão o GCC quebra a instantiation do template.
 - Membro de classe-base **não** pode ir no member-init-list; assigne no corpo do ctor.
 - Nome de função não pode shadowear um membro de dados do mesmo tipo (ex.: `loop` vs `loop_`).

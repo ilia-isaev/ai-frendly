@@ -12,6 +12,9 @@ com tipo especificado em template. Esse metodo, deve retornar imediatamente.
 Deve existir uma outro metodo para consultar os requisições finalizadas. Deve
 existir um metodo para remover os requisições finalizadas.
 
+Quando consultar os requisições prontos, alguns request não vão ser tratados na
+hora, por isso preciso uma função que só remove requisições escolidos.
+
 Veja considerações sobre ambiente em `PROJECT_PROMT_EXT.md`.
 
 Caminho para código fonte uSockets: `../../third_party/uSockets-0.8.8`
@@ -19,6 +22,7 @@ Caminho para código fonte libuv: `../../third_party/libuv-v1.52.0`
 
 1 Analiza código fonte.
 2 Veja se da para fazer consultas HTTP GET asyncrono.
+2.1 Veja se da para fazer consultas HTTP POST asyncrono.
 3 Cria esboço de arquitetura desse projeto e plano de implementação. Ponha resultado em `./docs`
 4 Revisa arquitetura e implementação.
 5 Implemente projeto usando passos anteriores.

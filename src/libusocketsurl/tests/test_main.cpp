@@ -2,6 +2,7 @@
 #include <chrono>
 #include <compare>
 #include <concepts>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <iterator>
@@ -23,7 +24,7 @@
 #include <sys/time.h>
 #include <unistd.h>
 
-import usurl;
+#include <usurl.hpp>
 
 static int g_failures = 0;
 
@@ -70,23 +71,39 @@ std::string chunked_encode(const std::string& body)
          + "0\r\n\r\n";
 }
 
-std::string build_response(const std::string& body, ServerFraming framing)
+std::string build_response(const std::string& body, ServerFraming framing,
+                           const std::string& extra_headers, int status)
 {
+    const std::string reason = (status == 200) ? "OK" : "Unauthorized";
+    const std::string status_line =
+        "HTTP/1.1 " + std::to_string(status) + " " + reason + "\r\n";
     switch (framing)
     {
     case ServerFraming::ContentLength:
-        return std::string("HTTP/1.1 200 OK\r\n")
+        return status_line
              + "Content-Length: " + std::to_string(body.size()) + "\r\n"
-             + "Connection: close\r\n" + "\r\n" + body;
+             + "Connection: close\r\n" + extra_headers + "\r\n" + body;
     case ServerFraming::Chunked:
-        return std::string("HTTP/1.1 200 OK\r\n")
+        return status_line
              + "Transfer-Encoding: chunked\r\n"
-             + "Connection: close\r\n" + "\r\n" + chunked_encode(body);
+             + "Connection: close\r\n" + extra_headers + "\r\n" + chunked_encode(body);
     case ServerFraming::CloseDelimited:
-        return std::string("HTTP/1.1 200 OK\r\n")
-             + "Connection: close\r\n" + "\r\n" + body;
+        return status_line
+             + "Connection: close\r\n" + extra_headers + "\r\n" + body;
     }
     return {};
+}
+
+long request_content_length(const std::string& head)
+{
+    const std::size_t p = head.find("Content-Length:");
+    if (p == std::string::npos)
+        return 0;
+    const std::string rest = head.substr(p + 15);
+    const std::size_t b = rest.find_first_not_of(" \t");
+    if (b == std::string::npos)
+        return 0;
+    return std::strtol(rest.c_str() + b, nullptr, 10);
 }
 
 struct TcpServer
@@ -95,6 +112,9 @@ struct TcpServer
     int port = 0;
     std::string body;
     ServerFraming framing = ServerFraming::ContentLength;
+    std::string extra_headers;
+    int status = 200;
+    std::string received_body;
     std::atomic<bool> stop{ false };
     std::thread worker;
 
@@ -107,10 +127,13 @@ struct TcpServer
             worker.join();
     }
 
-    void start(const std::string& body_, ServerFraming framing_)
+    void start(const std::string& body_, ServerFraming framing_,
+               const std::string& extra_headers_ = {}, int status_ = 200)
     {
         body = body_;
         framing = framing_;
+        extra_headers = extra_headers_;
+        status = status_;
         listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
@@ -143,16 +166,29 @@ struct TcpServer
             }
             std::string req;
             char buf[8192];
+            std::size_t hdr_end = std::string::npos;
+            long want = 0;
             for (;;)
             {
                 const ssize_t n = ::read(conn, buf, sizeof buf);
                 if (n <= 0)
                     break;
                 req.append(buf, static_cast<std::size_t>(n));
-                if (req.find("\r\n\r\n") != std::string::npos)
+                if (hdr_end == std::string::npos)
+                {
+                    hdr_end = req.find("\r\n\r\n");
+                    if (hdr_end != std::string::npos)
+                        want = request_content_length(req);
+                }
+                if (hdr_end == std::string::npos)
+                    continue;
+                if (req.size() >= hdr_end + 4 + static_cast<std::size_t>(want))
                     break;
             }
-            const std::string resp = build_response(body, framing);
+            if (hdr_end != std::string::npos && want > 0
+                && req.size() >= hdr_end + 4 + static_cast<std::size_t>(want))
+                received_body = req.substr(hdr_end + 4, static_cast<std::size_t>(want));
+            const std::string resp = build_response(body, framing, extra_headers, status);
             std::size_t off = 0;
             while (off < resp.size())
             {
@@ -285,6 +321,14 @@ int main()
             check(!fins.empty() && fins[0].status == 200, "GET: status is 200");
             check(!fins.empty() && fins[0].body == "hello", "GET: body matches");
             check(!fins.empty() && fins[0].payload == 42, "GET: payload preserved");
+            bool conn_close = false;
+            if (!fins.empty())
+            {
+                for (const auto& h : fins[0].headers)
+                    if (h.first == "Connection" && h.second == "close")
+                        conn_close = true;
+            }
+            check(conn_close, "GET: response headers parsed");
         }
 
         // Case 4: remove_finished clears a finished record
@@ -326,6 +370,21 @@ int main()
             const bool d5 = pump([&] { return client.finished<int>().size() == 2; });
             const std::vector<Finished<int>> v5 = client.finished<int>();
             check(d5 && v5.size() == 2, "multiple: two finished records");
+
+            // Selective removal: remove only the chosen record; the other
+            // finished record must stay.
+            const Finished<int>* chosen = nullptr;
+            for (const auto& f : v5)
+                if (f.payload == 1)
+                    chosen = &f;
+            if (d5 && v5.size() == 2 && chosen)
+            {
+                client.remove_finished(chosen->handle);
+                const std::vector<Finished<int>> v5b = client.finished<int>();
+                check(v5b.size() == 1, "selective remove: one record remains");
+                check(v5b.size() == 1 && v5b[0].payload == 2,
+                      "selective remove: unchosen record stays");
+            }
         }
     }
 
@@ -384,6 +443,59 @@ int main()
         check(
             !fs.empty() && fs[0].payload == "abc",
             "multi-type: string payload preserved");
+    }
+
+    // --- T6: POST with JSON body + Set-Cookie exposure (auth pattern) ---
+    {
+        TcpServer server;
+        const std::string token_body = "{\"status\":\"SUCCESS\"}";
+        server.start(token_body, ServerFraming::ContentLength,
+                     "Set-Cookie: authorization: jwt-secret-123\r\n");
+        const std::string base = base_of(server.port);
+
+        Client client(loop);
+        const std::string auth_req =
+            "{\"appId\":\"my-app\",\"clientId\":\"cid\",\"secretKey\":\"sk\"}";
+        client.post<int>(base + "/token", auth_req, 99);
+        const bool done = pump([&] { return !client.finished<int>().empty(); });
+        check(done, "POST: request completed");
+        const std::vector<Finished<int>> fins = client.finished<int>();
+        check(done && !fins.empty() && fins[0].status == 200, "POST: status is 200");
+        check(done && !fins.empty() && fins[0].body == token_body,
+              "POST: body matches");
+        check(done && !fins.empty() && fins[0].payload == 99,
+              "POST: payload preserved");
+        check(done && !fins.empty() && server.received_body == auth_req,
+              "POST: server received body");
+        bool cookie = false;
+        if (!fins.empty())
+        {
+            for (const auto& h : fins[0].headers)
+                if (h.first == "Set-Cookie"
+                    && h.second.find("jwt-secret-123") != std::string::npos)
+                    cookie = true;
+        }
+        check(cookie, "POST: Set-Cookie header exposed");
+    }
+
+    // --- T7: POST to an endpoint answering 401 ---
+    {
+        TcpServer server;
+        server.start("unauthorized", ServerFraming::ContentLength, {}, 401);
+        const std::string base = base_of(server.port);
+
+        Client client(loop);
+        client.post<std::string>(base + "/token", std::string("bad-creds"),
+                                 std::string("anon"));
+        const bool done = pump([&] {
+            return !client.finished<std::string>().empty();
+        });
+        const std::vector<Finished<std::string>> fins =
+            client.finished<std::string>();
+        check(done && !fins.empty() && fins[0].status == 401,
+              "POST 401: status reported");
+        check(done && !fins.empty() && fins[0].body == "unauthorized",
+              "POST 401: body matches");
     }
 
     // --- T5: read timeout fires on a silent connection ---

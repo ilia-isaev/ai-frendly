@@ -1,0 +1,11 @@
+{
+  "id": "string",
+  "metadata": {},
+  "request": {
+    "appId": "regproc",
+    "clientId": "mosip-regproc-client",
+    "secretKey": "abc123"
+  },
+  "requesttime": "2018-12-10T06:12:52.994Z",
+  "version": "string"
+}

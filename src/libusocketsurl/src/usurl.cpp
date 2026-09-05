@@ -1,204 +1,11 @@
-module;
+#include "usurl.hpp"
 
 #include <cctype>
-#include <compare>
-#include <concepts>
 #include <cstdlib>
-#include <cstring>
-#include <functional>
-#include <iterator>
 #include <list>
-#include <memory>
 #include <string>
-#include <type_traits>
-#include <vector>
 
-#include <uv.h>
-#include <libusockets.h>
 #include <openssl/ssl.h>
-
-export module usurl;
-
-// ===========================================================================
-//  INTERFACE
-// ===========================================================================
-
-export template <typename T>
-struct Finished
-{
-    std::string url;
-    int status = 0;
-    std::string body;
-    std::string error;
-    T payload;
-    const void* handle = nullptr;
-};
-
-export template <typename T>
-struct type_tag
-{
-    static const void* id()
-    {
-        static char storage;
-        return &storage;
-    }
-};
-
-export enum class Framing
-{
-    close_delimited,
-    content_length,
-    chunked
-};
-
-export struct ParsedUrl
-{
-    bool ok = false;
-    bool is_ssl = false;
-    std::string host;
-    int port = 0;
-    int default_port = 80;
-    std::string path = "/";
-    std::string path_and_query = "/";
-    std::string host_header;
-};
-
-export ParsedUrl parse_url(const std::string& url);
-export std::string build_request(const ParsedUrl& p);
-
-export class Client;
-export class RecordBase;
-
-export struct SocketState
-{
-    Client* client = nullptr;
-    RecordBase* record = nullptr;
-    int ssl = 0;
-};
-
-export class RecordBase
-{
-public:
-    Client* client = nullptr;
-    const void* type_id = nullptr;
-    void* finished_ptr = nullptr;
-    std::string url;
-    std::string request;
-    std::size_t request_written = 0;
-    ParsedUrl parsed;
-    int ssl = 0;
-    struct us_socket_t* socket = nullptr;
-    SocketState* state = nullptr;
-    bool finished = false;
-    bool socket_gone = false;
-    std::string buf;
-    std::string body;
-    int status = 0;
-    std::string error;
-    std::function<void(RecordBase*)> commit;
-    std::function<void(RecordBase*)> destroy;
-    Framing framing = Framing::close_delimited;
-    long body_start = -1;
-    long content_length = -1;
-
-    void on_open(struct us_socket_t* s);
-    void on_data(char* data, std::size_t len);
-    void on_end();
-    void on_writable(struct us_socket_t* s);
-    void on_close(struct us_socket_t* s);
-    void on_timeout();
-    void on_connect_error(struct us_socket_t* s, int err);
-
-    void process(const char* data, std::size_t len);
-    void finalize();
-    void finish();
-    void detect_framing();
-    void check_complete();
-};
-
-export template <typename T>
-struct Record final : RecordBase
-{
-    Finished<T> fin;
-
-    Record(Client* c, const std::string& url_, T payload, const void* tid)
-    {
-        client = c;
-        type_id = tid;
-        url = url_;
-
-        parsed = parse_url(url_);
-        if (parsed.ok)
-            request = build_request(parsed);
-
-        fin.url = url_;
-        fin.payload = std::move(payload);
-        fin.handle = &fin;
-        finished_ptr = &fin;
-
-        commit = [this](RecordBase* rb) {
-            auto* r = static_cast<Record<T>*>(rb);
-            fin.url = r->url;
-            fin.status = r->status;
-            fin.body = std::move(r->body);
-            fin.error = std::move(r->error);
-        };
-        destroy = [this](RecordBase* rb) {
-            delete static_cast<Record<T>*>(rb);
-        };
-    }
-};
-
-export class Client
-{
-public:
-    explicit Client(uv_loop_t* loop);
-    ~Client();
-
-    Client(const Client&) = delete;
-    Client& operator=(const Client&) = delete;
-
-    uv_loop_t* loop() const { return loop_; }
-
-    template <typename T>
-    void get(const std::string& url, const T& payload)
-    {
-        start_request(url, type_tag<T>::id(),
-            [url, payload](Client* c, const void* tid) -> void* {
-                return new Record<T>(c, url, payload, tid);
-            });
-    }
-
-    template <typename T>
-    std::vector<Finished<T>> finished() const
-    {
-        std::vector<Finished<T>> out;
-        for (auto* r : records) {
-            if (r->finished && r->type_id == type_tag<T>::id())
-                out.push_back(*static_cast<Finished<T>*>(r->finished_ptr));
-        }
-        return out;
-    }
-
-    void remove_finished(const void* handle);
-
-private:
-    using MakeFn = std::function<void*(Client*, const void*)>;
-
-    void start_request(const std::string& url, const void* type_id, MakeFn make);
-    void connect_record(RecordBase* rec);
-    void destroy_record(RecordBase* rec);
-
-    struct us_loop_t* usloop = nullptr;
-    struct us_socket_context_t* tcp_ctx = nullptr;
-    struct us_socket_context_t* ssl_ctx = nullptr;
-    std::list<RecordBase*> records;
-    uv_loop_t* loop_ = nullptr;
-};
-
-// ===========================================================================
-//  IMPLEMENTATION
-// ===========================================================================
 
 namespace
 {
@@ -243,6 +50,28 @@ std::string header_value(const std::string& headers, const std::string& name)
         pos = eol + 2;
     }
     return {};
+}
+
+std::vector<std::pair<std::string, std::string>> parse_headers(const std::string& head)
+{
+    std::vector<std::pair<std::string, std::string>> out;
+    const std::size_t first_eol = head.find("\r\n");
+    if (first_eol == std::string::npos)
+        return out;
+    std::size_t pos = first_eol + 2;
+    while (pos < head.size())
+    {
+        const std::size_t eol = head.find("\r\n", pos);
+        const std::size_t end = (eol == std::string::npos) ? head.size() : eol;
+        const std::string line = head.substr(pos, end - pos);
+        const std::size_t colon = line.find(':');
+        if (colon != std::string::npos)
+            out.emplace_back(trim(line.substr(0, colon)), trim(line.substr(colon + 1)));
+        if (eol == std::string::npos)
+            break;
+        pos = eol + 2;
+    }
+    return out;
 }
 
 int hexval(char c)
@@ -402,6 +231,19 @@ std::string build_request(const ParsedUrl& p)
     req += "Connection: close\r\n";
     req += "Accept: */*\r\n";
     req += "\r\n";
+    return req;
+}
+
+std::string build_request(const ParsedUrl& p, const std::string& body)
+{
+    std::string req;
+    req += "POST " + p.path_and_query + " HTTP/1.1\r\n";
+    req += "Host: " + p.host_header + "\r\n";
+    req += "Connection: close\r\n";
+    req += "Content-Type: application/json\r\n";
+    req += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+    req += "\r\n";
+    req += body;
     return req;
 }
 
@@ -630,6 +472,7 @@ void RecordBase::detect_framing()
 
     body_start = static_cast<long>(hdr_end) + 4;
     const std::string headers = buf.substr(0, hdr_end);
+    resp_headers = parse_headers(headers);
 
     content_length = -1;
     framing = Framing::close_delimited;

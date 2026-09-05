@@ -1,4 +1,11 @@
-# GCC / g++ 14 — C++23 modules build gotchas (usurl)
+# GCC / g++ 14 — C++23 modules build gotchas (usurl) — HISTÓRICO
+
+NOTA: esta nota documenta o antigo build com C++23 modules (`src/usurl.cxx`,
+removido na migração para cabeçalhos convencionais); as referências de linha
+apontam para esse arquivo antigo. As gotchas 1, 4 e 5 são específicas de
+modules (não se aplicam aos cabeçalhos convencionais atuais); as gotchas 2
+(membro de classe-base no member-init-list) e 3 (nome de função shadoweando
+membro de dados) valem para C++ comum — mantidas no AGENTS.md.
 
 Componente: module `usurl` (fonte `src/usurl.cxx`), importado por `tests/test_main.cpp`.
 Toolchain: g++ 14.2.0, flags `-fmodules-ts -std=c++2b` (CMakeLists.txt).

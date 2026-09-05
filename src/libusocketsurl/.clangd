@@ -1,5 +1,5 @@
 CompileFlags:
   CompilationDatabase: "build"
-  Add: [-std=c++23, -fmodules]
-  Remove: [-fmodules-ts, -fmodule-mapper=*, -fdeps-format=*, -fmodules]
-  Compiler: /usr/bin/g++-14
+  Add: [-std=c++23]
+  Remove: [, -fmodules, -fmodules-ts, -fmodule-mapper=, -fdeps-format=]
+  Compiler: /usr/bin/g++

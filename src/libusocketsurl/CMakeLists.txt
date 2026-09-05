@@ -26,19 +26,19 @@ find_library(LIB_CRYPTO NAMES crypto REQUIRED)
 # Include directories (uSockets + libuv headers)
 set(PROJECT_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../include)
 
-# Static library (C++23 module)
-add_library(usurl STATIC)
+# Static library (C++23, conventional headers)
+add_library(usurl STATIC src/usurl.cpp)
 
-target_sources(usurl
-    PUBLIC
-    FILE_SET usurl_modulos TYPE CXX_MODULES
-    BASE_DIRS src
-    FILES src/usurl.cxx
-)
+# Propaga o standard (C++23) como feature exportável ao install(EXPORT),
+# para que consumidores com CMake >= 3.23 herdem o standard do target.
+target_compile_features(usurl INTERFACE cxx_std_23)
+#set_target_properties(usurl PROPERTIES CXX_STANDARD 23) # talvez melhor?
 
 target_include_directories(usurl
-    PRIVATE
-    ${PROJECT_INCLUDE_DIR}
+    PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src>
+    $<BUILD_INTERFACE:${PROJECT_INCLUDE_DIR}>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
 )
 
 target_link_libraries(usurl
@@ -71,16 +71,14 @@ install(TARGETS usurl
 	ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 	LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
 	RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-
-	FILE_SET usurl_modulos
-		DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/usurl/modules
 )
+
+install(FILES src/usurl.hpp DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
 install(EXPORT usurlTargets
 	FILE usurlTargets.cmake
 	NAMESPACE usurl::
 	DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/usurl
-	CXX_MODULES_DIRECTORY cmake/usurl/modules
 )
 
 configure_package_config_file(

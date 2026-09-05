@@ -3,18 +3,18 @@
 Status: concluída — build verde, executável `usurl_tests` compila, todos os 20 checks PASS, exit 0.
 
 ## O que foi entregue
-- Module `usurl` (`src/usurl.cxx`) — C++23 module (`.cxx`), target estático `usurl`.
-- Teste (`tests/test_main.cpp`) — importador do module; `TcpServer` (HTTP local em
+- `usurl` — target estático C++23: header `src/usurl.hpp` + implementação `src/usurl.cpp` (antes: module `src/usurl.cxx`, removido).
+- Teste (`tests/test_main.cpp`) — consumidor do header (`#include <usurl.hpp>`); `TcpServer` (HTTP local em
   thread) + `StallServer` (para timeout); **20 checks** cobrindo: content-length
   (sucesso / `remove_finished` / URL inválida / refused / múltiplos), chunked,
   close-delimited, multi-type (type-erasure) e timeout.
-- `CMakeLists.txt` — Ninja + `FILE_SET CXX_MODULES`; `find_library` para `uSockets`,
-  `uv`, `ssl`, `crypto`.
+- `CMakeLists.txt` — Ninja, target estático (`src/usurl.cpp`), includes PUBLIC com
+   generator expressions; `find_library` para `uSockets`, `uv`, `ssl`, `crypto`.
 - Build: `cmake -B build -G Ninja` → `cmake --build build` → `./build/usurl_tests`.
 
-## API pública como IMPLEMENTADA (module `usurl`, SEM namespace)
+## API pública como IMPLEMENTADA (header `usurl.hpp`, SEM namespace)
 ```
-export module usurl;
+// src/usurl.hpp (entidades globais, sem namespace)
 
 export template <typename T> struct Finished {
     std::string url; int status; std::string body;
@@ -40,8 +40,8 @@ export class Client {
   content-length / chunked / close-delimited; `Connection: close`.
 
 ## Divergências corrigidas vs. o plano (etapa2-3)
-- module name `libusocketsurl` → **`usurl`** (bate com o target CMake).
-- `namespace usurl` → **sem namespace** (module já escopa as entities).
+- module name `libusocketsurl` → **`usurl`** (bate com o target CMake; hoje o header é `src/usurl.hpp`).
+- `namespace usurl` → **sem namespace** (no header as entidades ficam globais, como no module).
 - PIMPL (`struct Impl`) → **membros diretos** em `Client`.
 - `Finished<T>` ganha `const void* handle`.
 - `finished<T>()` devolve **cópias** `std::vector<Finished<T>>` (não ponteiros).
@@ -70,10 +70,10 @@ export class Client {
 - Diagnóstico feito com marcadores em `stderr` (unbuffered). Marcadores removidos depois.
 
 ## Timeout (S1 + T5)
-- `constexpr int kTimeoutSec = 4;` (`src/usurl.cxx:537`).
-- Armada em `on_open` (`src/usurl.cxx:551`) e re-armada no `connect_record`
-  (`src/usurl.cxx:775`), via `us_socket_timeout(ssl, s, kTimeoutSec)`.
-- `on_timeout` (`src/usurl.cxx:592`) só age se `!finished`; finaliza com
+- `constexpr int kTimeoutSec = 4;` (`src/usurl.cpp:344`).
+- Armada em `on_open` (`src/usurl.cpp:358`) e re-armada no `connect_record`
+   (`src/usurl.cpp:582`), via `us_socket_timeout(ssl, s, kTimeoutSec)`.
+- `on_timeout` (`src/usurl.cpp:399`) só age se `!finished`; finaliza com
   `error="timeout"`, `status=0`.
 - T5: `StallServer` aceita a conexão e fica 8000 ms em silêncio → timeout em ~4 s.
 
@@ -82,12 +82,12 @@ export class Client {
   vazia) → SIGABRT, INTERMITENTE no `ctest`, ausente no run direto.
 - Causa: `on_timeout` finaliza sem fechar o socket; `destroy_record` deletava
   `rec`/`st` com o socket aberto → callback tardio via `state_of` fazia UAF.
-- Correção: `destroy_record` (`src/usurl.cxx:778`) desanexa o ext-slot (p/ `nullptr`)
+- Correção: `destroy_record` (`src/usurl.cpp:585`) desanexa o ext-slot (p/ `nullptr`)
   e chama `us_socket_close` antes de deletar, guardado por `socket_gone`
-  (`src/usurl.cxx:93`). Detalhes em `design_notes/usockets-shared-loop.md` (GOTCHA 3).
+  (`src/usurl.hpp:84`). Detalhes em `design_notes/usockets-shared-loop.md` (GOTCHA 3).
 
 ## Decoder chunked — operar sobre o body, não sobre o buffer inteiro
-- `chunked_complete(buf, start)` (`src/usurl.cxx:289`) e `decode_chunked(buf, start)`
-  (`src/usurl.cxx:307`) tomam `start = body_start`. Antes, começavam em `pos=0` e a
+- `chunked_complete(buf, start)` (`src/usurl.cpp:96`) e `decode_chunked(buf, start)`
+  (`src/usurl.cpp:114`) tomam `start = body_start`. Antes, começavam em `pos=0` e a
   status-line `HTTP/1.1 200 OK` era lida como "chunk size" → `ok=false` para sempre
   → o record do chunked nunca finalizava (T2 travava).
