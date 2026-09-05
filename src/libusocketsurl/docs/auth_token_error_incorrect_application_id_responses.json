@@ -1,0 +1,13 @@
+{
+  "id": "string",
+  "version": "string",
+  "responsetime": "2021-01-06T06:00:45.374Z",
+  "metadata": null,
+  "response": null,
+  "errors": [
+    {
+      "errorCode": "KER-ATH-026",
+      "message": "Realm not found:: adminXX"
+    }
+  ]
+}

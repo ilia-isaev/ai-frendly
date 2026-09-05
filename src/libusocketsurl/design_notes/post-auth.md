@@ -55,5 +55,8 @@ integridade do body (T6).
 ## Fronteira / próximos passos
 - JWT em `Set-Cookie`: a lib **não** interpreta o cookie — o caller extrai de
   `Finished<T>::headers` (passo do prompt: "extração do JWT fica no caller").
+  Fechada no item 2.2 (ver `design_notes/get-auth-token.md`): o JWT extraído
+  entra como `token` em `get`/`post` e viaja em
+  `Authorization: Bearer <token>`.
 - Sem retry, sem cookie jar, sem keep-alive (restrição `Connection: close` do
   design).

@@ -26,8 +26,8 @@ Após `#include <usurl.hpp>`, os tipos são globais (`Client`, `Finished<T>`).
 
 - `explicit Client(uv_loop_t* loop)` — cria o cliente sobre o loop (delega a `us_create_loop(loop)`).
 - `uv_loop_t* loop() const`.
-- `template <T> void get(const std::string& url, const T& payload)` — dispara o GET.
-- `template <T> void post(const std::string& url, const std::string& body, const T& payload)` — dispara o POST (body serializado pelo caller; a lib adiciona `Content-Type: application/json` + `Content-Length`).
+- `template <T> void get(const std::string& url, const T& payload, const std::string& token = {})` — dispara o GET; com `token` não-vazio, a lib adiciona `Authorization: Bearer <token>`.
+- `template <T> void post(const std::string& url, const std::string& body, const T& payload, const std::string& token = {})` — dispara o POST (body serializado pelo caller; a lib adiciona `Content-Type: application/json` + `Content-Length`); `token` como no GET.
 - `template <T> std::vector<Finished<T>> finished() const` — devolve **cópias** dos `Finished<T>` finalizados; **não remove nada** (o record permanece no `Client`).
 - `void remove_finished(const void* handle)` — remove **apenas** o requisição finalizado escolhido (indicado pelo `Finished<T>::handle`); os demais — finalizados ou pendentes — permanecem. Permite tratar na hora apenas um subconjunto dos prontos.
 
@@ -60,11 +60,13 @@ uSockets 0.8.8 ── libuv 1.52.0 (event loop externa, dirigida pela aplicaçã
 
 ## Status do plano (8 passos)
 Todos os 8 passos do `PROJECT_PROMT.md` estão **concluídos**. Build verde; o
-executável `usurl_tests` compila; os **30 checks** passam; exit 0.
+executável `usurl_tests` compila; exit 0.
 Migração module → cabeçalhos convencionais (tarefa pós-plano) também **concluída**:
 `docs/etapa5-cabecalhos-convencionais.md`; build verde, 20/20 PASS.
 **POST assíncrono** (passo 2.1 do prompt) também **concluído**:
 `docs/etapa6-http-post.md`; build verde, 28/28 PASS.
+**Token de autorização em GET/POST** (passo 2.2 do prompt) também
+**concluído**: `docs/etapa7-auth-token-get.md`; build verde, **49/49 PASS**.
 
 | Passo | Conteúdo | Onde está registrado | Status |
 |---|---|---|---|
@@ -89,7 +91,9 @@ passo 7 é a seção "Divergências corrigidas vs. o plano").
 - `design_notes/migracao-cabecalhos-convencionais.md` — migração module → cabeçalhos convencionais (layout + gotchas).
 - `docs/etapa5-cabecalhos-convencionais.md` — resumo da migração.
 - `docs/etapa6-http-post.md` — implementação de POST assíncrono (auth token).
+- `docs/etapa7-auth-token-get.md` — resumo do token de autorização em GET/POST (passo 2.2).
 - `design_notes/post-auth.md` — decisões de design do POST (request, corpo, headers de resposta).
+- `design_notes/get-auth-token.md` — decisões de design do token em GET/POST (Bearer, builder, fronteira caller).
 - `design_notes/usockets-shared-loop.md` — loop compartilhado (stubs pre/post/wakeup; `us_loop_free` em loop adotado).
 
 ## Build e teste

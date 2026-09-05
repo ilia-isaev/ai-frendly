@@ -1,0 +1,13 @@
+{
+  "id": "string",
+  "version": "string",
+  "responsetime": "2021-01-06T06:00:17.962Z",
+  "metadata": null,
+  "response": null,
+  "errors": [
+    {
+      "errorCode": "500",
+      "message": "401 Unauthorized"
+    }
+  ]
+}

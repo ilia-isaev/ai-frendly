@@ -71,6 +71,27 @@ std::string chunked_encode(const std::string& body)
          + "0\r\n\r\n";
 }
 
+// Caller-side JWT extraction (prompt: extraction stays with the caller).
+// The auth endpoint answers `Set-Cookie: authorization: <JWT>`; the JWT is
+// everything after "authorization:" with leading whitespace trimmed.
+std::string extract_token(const Finished<std::string>& fin)
+{
+    static const std::string key = "authorization:";
+    for (const auto& h : fin.headers)
+    {
+        if (h.first != "Set-Cookie")
+            continue;
+        const std::size_t p = h.second.find(key);
+        if (p == std::string::npos)
+            continue;
+        std::string rest = h.second.substr(p + key.size());
+        while (!rest.empty() && (rest.front() == ' ' || rest.front() == '\t'))
+            rest.erase(rest.begin());
+        return rest;
+    }
+    return {};
+}
+
 std::string build_response(const std::string& body, ServerFraming framing,
                            const std::string& extra_headers, int status)
 {
@@ -115,6 +136,8 @@ struct TcpServer
     std::string extra_headers;
     int status = 200;
     std::string received_body;
+    std::string received_head;
+    std::string require_auth;
     std::atomic<bool> stop{ false };
     std::thread worker;
 
@@ -128,12 +151,15 @@ struct TcpServer
     }
 
     void start(const std::string& body_, ServerFraming framing_,
-               const std::string& extra_headers_ = {}, int status_ = 200)
+               const std::string& extra_headers_ = {}, int status_ = 200,
+               const std::string& require_auth_ = {})
     {
         body = body_;
         framing = framing_;
         extra_headers = extra_headers_;
         status = status_;
+        require_auth = require_auth_;
+        received_head.clear();
         listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
         sockaddr_in addr{};
         addr.sin_family = AF_INET;
@@ -185,10 +211,19 @@ struct TcpServer
                 if (req.size() >= hdr_end + 4 + static_cast<std::size_t>(want))
                     break;
             }
-            if (hdr_end != std::string::npos && want > 0
-                && req.size() >= hdr_end + 4 + static_cast<std::size_t>(want))
-                received_body = req.substr(hdr_end + 4, static_cast<std::size_t>(want));
-            const std::string resp = build_response(body, framing, extra_headers, status);
+            int eff_status = status;
+            if (hdr_end != std::string::npos)
+            {
+                received_head = req.substr(0, hdr_end);
+                if (want > 0
+                    && req.size() >= hdr_end + 4 + static_cast<std::size_t>(want))
+                    received_body = req.substr(hdr_end + 4, static_cast<std::size_t>(want));
+                if (!require_auth.empty()
+                    && received_head.find("Authorization: Bearer " + require_auth)
+                           == std::string::npos)
+                    eff_status = 401;
+            }
+            const std::string resp = build_response(body, framing, extra_headers, eff_status);
             std::size_t off = 0;
             while (off < resp.size())
             {
@@ -496,6 +531,157 @@ int main()
               "POST 401: status reported");
         check(done && !fins.empty() && fins[0].body == "unauthorized",
               "POST 401: body matches");
+    }
+
+    // --- T8: GET carrying the auth token (Authorization: Bearer) ---
+    {
+        TcpServer server;
+        server.start("secret", ServerFraming::ContentLength, {}, 200,
+                     "jwt-e2e-001");
+        const std::string base = base_of(server.port);
+
+        Client client(loop);
+
+        // With token: the endpoint accepts.
+        client.get<int>(base + "/secret", 1, "jwt-e2e-001");
+        {
+            const bool done = pump([&] { return !client.finished<int>().empty(); });
+            const std::vector<Finished<int>> fins = client.finished<int>();
+            check(done && !fins.empty() && fins[0].status == 200,
+                  "GET token: accepted (200)");
+            check(done && !fins.empty() && fins[0].body == "secret",
+                  "GET token: body matches");
+            check(server.received_head.find("Authorization: Bearer jwt-e2e-001")
+                      != std::string::npos,
+                  "GET token: server saw Bearer header");
+        }
+
+        // Without token: the same endpoint rejects with 401.
+        client.get<int>(base + "/secret", 2);
+        {
+            const bool done = pump([&] {
+                return client.finished<int>().size() == 2;
+            });
+            const std::vector<Finished<int>> fins = client.finished<int>();
+            check(done && fins.size() == 2 && fins[1].status == 401,
+                  "GET no token: rejected (401)");
+        }
+    }
+
+    // --- T9: POST carrying the auth token ---
+    {
+        TcpServer server;
+        server.start("action-ok", ServerFraming::ContentLength, {}, 200,
+                     "jwt-e2e-001");
+        const std::string base = base_of(server.port);
+
+        Client client(loop);
+        client.post<int>(base + "/action", "{\"id\":\"1\"}", 3, "jwt-e2e-001");
+        const bool done = pump([&] { return !client.finished<int>().empty(); });
+        const std::vector<Finished<int>> fins = client.finished<int>();
+        check(done && !fins.empty() && fins[0].status == 200,
+              "POST token: accepted (200)");
+        check(done && !fins.empty() && fins[0].payload == 3,
+              "POST token: payload preserved");
+        check(server.received_head.find("Authorization: Bearer jwt-e2e-001")
+                  != std::string::npos,
+              "POST token: server saw Bearer header");
+        check(server.received_body == "{\"id\":\"1\"}",
+              "POST token: body intact");
+    }
+
+    // --- T10: end-to-end auth flow (POST /token -> JWT -> authenticated GET) ---
+    {
+        const std::string jwt = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiJ9.e2e";
+
+        TcpServer token_server;
+        token_server.start("{\"response\":{\"status\":\"Success\"}}",
+                           ServerFraming::ContentLength,
+                           "Set-Cookie: authorization: " + jwt + "\r\n");
+        const std::string token_base = base_of(token_server.port);
+
+        TcpServer api_server;
+        api_server.start("mosip-data", ServerFraming::ContentLength, {}, 200, jwt);
+        const std::string api_base = base_of(api_server.port);
+
+        Client client(loop);
+
+        // Step 1: obtain the token.
+        client.post<std::string>(token_base + "/token",
+                                 "{\"appId\":\"admin\",\"clientId\":\"cid\"}",
+                                 std::string("auth"));
+        const bool auth_done =
+            pump([&] { return !client.finished<std::string>().empty(); });
+        check(auth_done, "auth flow: token POST completed");
+
+        // Step 2: caller extracts the JWT from Set-Cookie.
+        std::string token;
+        if (auth_done)
+            token = extract_token(client.finished<std::string>()[0]);
+        check(token == jwt, "auth flow: JWT extracted from Set-Cookie");
+
+        // Step 3: authenticated GET.
+        client.get<std::string>(api_base + "/data", std::string("q"), token);
+        const bool get_done = pump([&] {
+            return client.finished<std::string>().size() == 2;
+        });
+        const std::vector<Finished<std::string>> fins =
+            client.finished<std::string>();
+        check(get_done && fins.size() == 2 && fins[1].status == 200,
+              "auth flow: authenticated GET accepted (200)");
+        check(get_done && fins.size() == 2 && fins[1].body == "mosip-data",
+              "auth flow: GET body matches");
+        check(get_done && fins.size() == 2 && fins[1].payload == "q",
+              "auth flow: GET payload preserved");
+    }
+
+    // --- T11: auth failure (error JSON, no Set-Cookie) -> unauthenticated GET 401 ---
+    {
+        const std::string error_body =
+            "{\"response\":null,\"errors\":[{\"errorCode\":\"KER-ATH-401\","
+            "\"message\":\"Authentication Failed : Invalid Token :Token verification "
+            "failed\"}]}";
+
+        TcpServer token_server;
+        token_server.start(error_body, ServerFraming::ContentLength);
+        const std::string token_base = base_of(token_server.port);
+
+        TcpServer api_server;
+        api_server.start("mosip-data", ServerFraming::ContentLength, {}, 200,
+                         "some-jwt");
+        const std::string api_base = base_of(api_server.port);
+
+        Client client(loop);
+
+        // Step 1: the auth endpoint answers 200 + error JSON (MOSIP pattern),
+        // and no Set-Cookie.
+        client.post<std::string>(token_base + "/token",
+                                 "{\"appId\":\"adminXX\",\"clientId\":\"cid\"}",
+                                 std::string("auth"));
+        const bool auth_done =
+            pump([&] { return !client.finished<std::string>().empty(); });
+        check(auth_done, "auth failure: token POST completed");
+
+        const std::vector<Finished<std::string>> afins =
+            client.finished<std::string>();
+        check(auth_done && !afins.empty()
+            && afins[0].body.find("KER-ATH-401") != std::string::npos,
+              "auth failure: error body exposed to caller");
+
+        // Step 2: no cookie -> extraction yields empty token.
+        std::string token =
+            (auth_done && !afins.empty()) ? extract_token(afins[0]) : std::string{};
+        check(token.empty(), "auth failure: no JWT in Set-Cookie");
+
+        // Step 3: GET without a valid token is rejected with 401.
+        client.get<std::string>(api_base + "/data", std::string("q"), token);
+        const bool get_done = pump([&] {
+            return client.finished<std::string>().size() == 2;
+        });
+        const std::vector<Finished<std::string>> gfins =
+            client.finished<std::string>();
+        check(get_done && gfins.size() == 2 && gfins[1].status == 401,
+              "auth failure: GET without token rejected (401)");
     }
 
     // --- T5: read timeout fires on a silent connection ---

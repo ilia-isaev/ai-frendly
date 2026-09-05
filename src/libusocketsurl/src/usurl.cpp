@@ -225,25 +225,38 @@ ParsedUrl parse_url(const std::string& url)
 
 std::string build_request(const ParsedUrl& p)
 {
-    std::string req;
-    req += "GET " + p.path_and_query + " HTTP/1.1\r\n";
-    req += "Host: " + p.host_header + "\r\n";
-    req += "Connection: close\r\n";
-    req += "Accept: */*\r\n";
-    req += "\r\n";
-    return req;
+    return build_request(p, {}, {});
 }
 
 std::string build_request(const ParsedUrl& p, const std::string& body)
 {
+    return build_request(p, body, {});
+}
+
+std::string build_request(const ParsedUrl& p, const std::string& body,
+                          const std::string& token)
+{
     std::string req;
-    req += "POST " + p.path_and_query + " HTTP/1.1\r\n";
-    req += "Host: " + p.host_header + "\r\n";
-    req += "Connection: close\r\n";
-    req += "Content-Type: application/json\r\n";
-    req += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+    if (body.empty())
+    {
+        req += "GET " + p.path_and_query + " HTTP/1.1\r\n";
+        req += "Host: " + p.host_header + "\r\n";
+        req += "Connection: close\r\n";
+        req += "Accept: */*\r\n";
+    }
+    else
+    {
+        req += "POST " + p.path_and_query + " HTTP/1.1\r\n";
+        req += "Host: " + p.host_header + "\r\n";
+        req += "Connection: close\r\n";
+        req += "Content-Type: application/json\r\n";
+        req += "Content-Length: " + std::to_string(body.size()) + "\r\n";
+    }
+    if (!token.empty())
+        req += "Authorization: Bearer " + token + "\r\n";
     req += "\r\n";
-    req += body;
+    if (!body.empty())
+        req += body;
     return req;
 }
 

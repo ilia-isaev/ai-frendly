@@ -58,6 +58,8 @@ struct ParsedUrl
 ParsedUrl parse_url(const std::string& url);
 std::string build_request(const ParsedUrl& p);
 std::string build_request(const ParsedUrl& p, const std::string& body);
+std::string build_request(const ParsedUrl& p, const std::string& body,
+                          const std::string& token);
 
 class Client;
 class RecordBase;
@@ -116,7 +118,7 @@ struct Record final : RecordBase
     Finished<T> fin;
 
     Record(Client* c, const std::string& url_, T payload, const void* tid,
-           const std::string& body = {})
+           const std::string& body = {}, const std::string& token = {})
     {
         client = c;
         type_id = tid;
@@ -124,9 +126,7 @@ struct Record final : RecordBase
 
         parsed = parse_url(url_);
         if (parsed.ok)
-            request = body.empty()
-                ? build_request(parsed)
-                : build_request(parsed, body);
+            request = build_request(parsed, body, token);
 
         fin.url = url_;
         fin.payload = std::move(payload);
@@ -159,20 +159,21 @@ public:
     uv_loop_t* loop() const { return loop_; }
 
     template <typename T>
-    void get(const std::string& url, const T& payload)
+    void get(const std::string& url, const T& payload, const std::string& token = {})
     {
         start_request(url, type_tag<T>::id(),
-            [url, payload](Client* c, const void* tid) -> void* {
-                return new Record<T>(c, url, payload, tid);
+            [url, payload, token](Client* c, const void* tid) -> void* {
+                return new Record<T>(c, url, payload, tid, {}, token);
             });
     }
 
     template <typename T>
-    void post(const std::string& url, const std::string& body, const T& payload)
+    void post(const std::string& url, const std::string& body, const T& payload,
+              const std::string& token = {})
     {
         start_request(url, type_tag<T>::id(),
-            [url, body, payload](Client* c, const void* tid) -> void* {
-                return new Record<T>(c, url, payload, tid, body);
+            [url, body, payload, token](Client* c, const void* tid) -> void* {
+                return new Record<T>(c, url, payload, tid, body, token);
             });
     }
 

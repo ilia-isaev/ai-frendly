@@ -1,0 +1,13 @@
+{
+  "id": null,
+  "version": null,
+  "responsetime": "2021-01-06T05:56:46.127Z",
+  "metadata": null,
+  "response": null,
+  "errors": [
+    {
+      "errorCode": "KER-ATH-006",
+      "message": "Cookies are empty"
+    }
+  ]
+}
